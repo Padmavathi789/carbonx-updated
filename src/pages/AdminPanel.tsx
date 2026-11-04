@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
-import { LayoutDashboard, Users, FolderKanban, ShoppingCart, CheckCircle, XCircle, Moon, Sun, ArrowRight, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../supabaseClient';
+import { LayoutDashboard, Users, FolderKanban, ShoppingCart, CheckCircle, XCircle, Moon, Sun, ArrowRight, ShieldCheck, RefreshCw, Loader2 } from 'lucide-react';
 import { mockProjects } from '../data/projects';
 
-// Mock Data
+// Mock Data fallbacks
 const mockFarmers = [
-  { id: 1, name: "Singh Farms", location: "Punjab, India", status: "Pending", submissionDate: "2026-04-28", size: "50 Acres", type: "Agroforestry" },
-  { id: 2, name: "Patel Energy", location: "Gujarat, India", status: "Pending", submissionDate: "2026-04-27", size: "120 Acres", type: "Solar Installation" },
-  { id: 3, name: "Kerala Greens", location: "Kerala, India", status: "Pending", submissionDate: "2026-04-26", size: "15 Acres", type: "Organic Plantation" },
+  { id: 'mock-1', name: "Singh Farms", location: "Punjab, India", status: "Pending", submissionDate: "2026-04-28", size: "50 Acres", type: "Agroforestry", isDb: false },
+  { id: 'mock-2', name: "Patel Energy", location: "Gujarat, India", status: "Pending", submissionDate: "2026-04-27", size: "120 Acres", type: "Solar Installation", isDb: false },
+  { id: 'mock-3', name: "Kerala Greens", location: "Kerala, India", status: "Pending", submissionDate: "2026-04-26", size: "15 Acres", type: "Organic Plantation", isDb: false },
 ];
 
 const mockCredits = [
@@ -17,33 +18,108 @@ const mockCredits = [
 export default function AdminPanel() {
   const [isDark, setIsDark] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [farmers, setFarmers] = useState(mockFarmers);
+  const [farmers, setFarmers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [credits, setCredits] = useState(mockCredits);
 
-  const approveFarmer = (id: number) => {
-    const farmer = farmers.find(f => f.id === id);
-    if (farmer) {
-      const newProject = {
-        id: Date.now(),
-        name: `${farmer.name} Project`,
-        location: farmer.location,
-        type: farmer.type,
-        available: "5,000 CC",
-        pricePerCredit: 25.00,
-        description: `Verified ${farmer.type} project by ${farmer.name}.`,
-        farmer: farmer.name,
-        image: "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&q=80&w=800",
-        coords: [20.5937, 78.9629] as [number, number],
-        verified: "Verified by Admin"
-      };
-      mockProjects.push(newProject);
-      setFarmers(farmers.filter(f => f.id !== id));
-      alert(`${farmer.name} approved! Their project is now listed in the Marketplace.`);
+  const fetchFarmers = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("farms")
+        .select("*")
+        .order("id", { ascending: false });
+
+      if (error) {
+        console.error("Error fetching farmers from Supabase:", error);
+        setFarmers(mockFarmers);
+      } else if (data && data.length > 0) {
+        const dbFarmers = data.map((farm: any) => ({
+          id: farm.id,
+          name: `Farmer #${farm.id}`,
+          location: farm.latitude && farm.longitude 
+            ? `${Number(farm.latitude).toFixed(4)}, ${Number(farm.longitude).toFixed(4)}` 
+            : "Location Tagged",
+          status: farm.status ? (farm.status.charAt(0).toUpperCase() + farm.status.slice(1)) : "Pending",
+          submissionDate: farm.created_at ? new Date(farm.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+          size: `${farm.area || 0} Acres`,
+          type: farm.practice ? (farm.species ? `${farm.practice} (${farm.species})` : farm.practice) : "Agroforestry",
+          carbon: farm.carbon,
+          trees: farm.trees,
+          isDb: true,
+          latitude: farm.latitude,
+          longitude: farm.longitude,
+          practice: farm.practice
+        }));
+
+        // Merge DB farmers with mock farmers
+        setFarmers([...dbFarmers, ...mockFarmers]);
+      } else {
+        setFarmers(mockFarmers);
+      }
+    } catch (err) {
+      console.error("Unexpected error fetching farmers:", err);
+      setFarmers(mockFarmers);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const rejectFarmer = (id: number) => {
-    setFarmers(farmers.filter(f => f.id !== id));
+  useEffect(() => {
+    fetchFarmers();
+  }, []);
+
+  const approveFarmer = async (id: number | string) => {
+    const farmer = farmers.find(f => f.id === id);
+    if (farmer) {
+      if (farmer.isDb) {
+        const { error } = await supabase
+          .from("farms")
+          .update({ status: "verified" })
+          .eq("id", id);
+          
+        if (error) {
+          console.error("Error approving farm in database:", error);
+          alert("Failed to update status in database.");
+          return;
+        }
+      }
+
+      const farmerName = farmer.name;
+      const newProject = {
+        id: Date.now(),
+        name: `${farmerName} Project`,
+        location: farmer.location,
+        type: farmer.type,
+        available: `${farmer.carbon || 5000} CC`,
+        pricePerCredit: 25.00,
+        description: `Verified ${farmer.type} project by ${farmerName}.`,
+        farmer: farmerName,
+        image: "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&q=80&w=800",
+        coords: [farmer.latitude || 20.5937, farmer.longitude || 78.9629] as [number, number],
+        verified: "Verified by Admin"
+      };
+      mockProjects.push(newProject);
+      setFarmers(prev => prev.filter(f => f.id !== id));
+      alert(`${farmerName} approved! Their project is now listed in the Marketplace.`);
+    }
+  };
+
+  const rejectFarmer = async (id: number | string) => {
+    const farmer = farmers.find(f => f.id === id);
+    if (farmer) {
+      if (farmer.isDb) {
+        const { error } = await supabase
+          .from("farms")
+          .update({ status: "rejected" })
+          .eq("id", id);
+          
+        if (error) {
+          console.error("Error rejecting farm in database:", error);
+        }
+      }
+      setFarmers(prev => prev.filter(f => f.id !== id));
+    }
   };
 
   const approveCredit = (id: number) => {
@@ -79,24 +155,32 @@ export default function AdminPanel() {
 
   const renderDashboard = () => (
     <div className="space-y-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-black text-slate-900 dark:text-white">Admin Dashboard</h1>
-        <p className="text-slate-500 dark:text-slate-400 mt-2 font-medium">Overview of your marketplace ecosystem.</p>
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-3xl font-black text-slate-900 dark:text-white">Admin Dashboard</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-2 font-medium">Overview of your marketplace ecosystem.</p>
+        </div>
+        <button 
+          onClick={fetchFarmers}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 font-bold text-xs transition-all"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh Data
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total Farmers</p>
-              <h3 className="text-4xl font-black text-slate-900 dark:text-white tracking-tighter">1,248</h3>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total Submissions</p>
+              <h3 className="text-4xl font-black text-slate-900 dark:text-white tracking-tighter">{farmers.length}</h3>
             </div>
             <div className="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl">
               <Users className="w-6 h-6" />
             </div>
           </div>
           <p className="text-sm text-emerald-500 mt-4 font-bold flex items-center gap-1">
-            <ArrowRight className="w-4 h-4 -rotate-45" /> +12 this week
+            <ArrowRight className="w-4 h-4 -rotate-45" /> Live from Database
           </p>
         </div>
         
@@ -135,51 +219,81 @@ export default function AdminPanel() {
 
   const renderFarmerVerification = () => (
     <div className="space-y-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-black text-slate-900 dark:text-white">Farmer Verification</h1>
-        <p className="text-slate-500 dark:text-slate-400 mt-2 font-medium">Review and verify new farmer registrations.</p>
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-3xl font-black text-slate-900 dark:text-white">Farmer Verification</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-2 font-medium">Review and verify new farmer registrations submitted to the platform.</p>
+        </div>
+        <button 
+          onClick={fetchFarmers}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-xl hover:bg-emerald-100 font-bold text-xs transition-all"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh Submissions
+        </button>
       </div>
 
       <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 uppercase text-[10px] font-black tracking-widest">
-              <tr>
-                <th className="px-6 py-5">Farmer Name</th>
-                <th className="px-6 py-5">Location</th>
-                <th className="px-6 py-5">Farm Details</th>
-                <th className="px-6 py-5">Submission Date</th>
-                <th className="px-6 py-5">Status</th>
-                <th className="px-6 py-5 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {farmers.map((farmer) => (
-                <tr key={farmer.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/20 transition-colors">
-                  <td className="px-6 py-5 font-bold text-slate-900 dark:text-white">{farmer.name}</td>
-                  <td className="px-6 py-5 text-slate-500 dark:text-slate-400 font-medium">{farmer.location}</td>
-                  <td className="px-6 py-5">
-                    <span className="block text-slate-900 dark:text-white font-bold">{farmer.size}</span>
-                    <span className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mt-1">{farmer.type}</span>
-                  </td>
-                  <td className="px-6 py-5 text-slate-500 dark:text-slate-400 font-medium">{farmer.submissionDate}</td>
-                  <td className="px-6 py-5">
-                    <span className="px-3 py-1.5 bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 rounded-full text-[10px] font-black uppercase tracking-widest">
-                      {farmer.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 flex items-center justify-end gap-2">
-                    <button onClick={() => approveFarmer(farmer.id)} className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-xl transition-colors" title="Approve">
-                      <CheckCircle className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => rejectFarmer(farmer.id)} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors" title="Reject">
-                      <XCircle className="w-5 h-5" />
-                    </button>
-                  </td>
+          {loading ? (
+            <div className="p-12 flex items-center justify-center gap-3 text-slate-400 font-bold">
+              <Loader2 className="w-6 h-6 animate-spin text-emerald-500" /> Fetching submissions from database...
+            </div>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 uppercase text-[10px] font-black tracking-widest">
+                <tr>
+                  <th className="px-6 py-5">Farmer / Source</th>
+                  <th className="px-6 py-5">Location</th>
+                  <th className="px-6 py-5">Farm Details</th>
+                  <th className="px-6 py-5">Submission Date</th>
+                  <th className="px-6 py-5">Status</th>
+                  <th className="px-6 py-5 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                {farmers.map((farmer) => (
+                  <tr key={farmer.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/20 transition-colors">
+                    <td className="px-6 py-5 font-bold text-slate-900 dark:text-white">
+                      <div className="flex items-center gap-2">
+                        {farmer.name}
+                        {farmer.isDb && (
+                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-black rounded uppercase">Live DB</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 text-slate-500 dark:text-slate-400 font-medium">{farmer.location}</td>
+                    <td className="px-6 py-5">
+                      <span className="block text-slate-900 dark:text-white font-bold">{farmer.size}</span>
+                      <span className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mt-1">{farmer.type}</span>
+                      {farmer.carbon && (
+                        <span className="block text-xs font-bold text-emerald-600 mt-0.5">{farmer.carbon} tCO₂e</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-5 text-slate-500 dark:text-slate-400 font-medium">{farmer.submissionDate}</td>
+                    <td className="px-6 py-5">
+                      <span className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                        farmer.status.toLowerCase() === 'verified' || farmer.status.toLowerCase() === 'approved'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400'
+                          : farmer.status.toLowerCase() === 'rejected'
+                          ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                      }`}>
+                        {farmer.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 flex items-center justify-end gap-2">
+                      <button onClick={() => approveFarmer(farmer.id)} className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-xl transition-colors" title="Approve">
+                        <CheckCircle className="w-5 h-5" />
+                      </button>
+                      <button onClick={() => rejectFarmer(farmer.id)} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors" title="Reject">
+                        <XCircle className="w-5 h-5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

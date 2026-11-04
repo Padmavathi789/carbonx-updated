@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import React, { useEffect, useState } from "react";
 import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
 import Navbar from "./components/Navbar";
@@ -22,7 +22,7 @@ import AdminPanel from "./pages/AdminPanel";
 import FarmMonitor from "./pages/FarmMonitor";
 
 /* 🔐 PROTECTED ROUTE (ROLE-BASED ACCESS CONTROL) */
-function ProtectedRoute(props: { children: JSX.Element; allowedRoles?: string[] }) {
+function ProtectedRoute(props: { children: React.ReactNode; allowedRoles?: string[] }) {
   const { children, allowedRoles } = props;
   const navigate = useNavigate();
   const [checking, setChecking] = useState(true);
